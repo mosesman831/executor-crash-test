@@ -22,9 +22,80 @@ async def test_replay_timing_and_metrics_without_network(monkeypatch):
     result = await replay(FIXTURE, speed=2)
     assert delays == [0.5] * 6
     assert result['mode'] == 'replay' and result['source'] == 'synthetic fixture'
-    assert result['status'] == 'WARN'
+    assert result['status'] == 'PASS'
     assert result['metrics']['contradiction'] is True
     assert result['metrics']['intermediate_events_missed'] is None
+
+
+@pytest.mark.asyncio
+async def test_f1_replay_censored_reconnect_is_inconclusive_not_zero(tmp_path):
+    import shutil
+
+    shutil.copytree(FIXTURE, tmp_path, dirs_exist_ok=True)
+    run_path = tmp_path / 'run.json'
+    run = json.loads(run_path.read_text())
+    run['status'] = 'WARN'
+    run['fault_record']['t_observe_end_ns'] = 7_000_000_000
+    run_path.write_text(json.dumps(run))
+
+    events_path = tmp_path / 'events.jsonl'
+    events = [json.loads(line) for line in events_path.read_text().splitlines() if line]
+    events = [
+        event for event in events
+        if not (
+            event.get('type') == 'agent.session.environment.connected'
+            and event.get('recv_ns', 0) > run['fault_record']['t_inject_ns']
+        )
+    ]
+    events_path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+
+    result = await replay(tmp_path, speed=1_000_000)
+    assert result['status'] == 'INCONCLUSIVE'
+    assert result['metrics']['reconnect_ms'] is None
+    assert result['metrics']['reconnect_censored'] is True
+    assert result['metrics']['reconnect_censor_ms'] == 4_000
+    assert result['metrics']['stream_available_at_settle'] is None
+    assert result['metrics']['stream_availability_basis'] == 'not_observed_in_replay'
+
+
+@pytest.mark.asyncio
+async def test_f1_replay_never_softens_recorded_fail(tmp_path):
+    import shutil
+
+    shutil.copytree(FIXTURE, tmp_path, dirs_exist_ok=True)
+    run_path = tmp_path / 'run.json'
+    run = json.loads(run_path.read_text())
+    run['status'] = 'FAIL'
+    run_path.write_text(json.dumps(run))
+    events_path = tmp_path / 'events.jsonl'
+    events = [json.loads(line) for line in events_path.read_text().splitlines() if line]
+    events = [
+        event for event in events
+        if not (
+            event.get('type') == 'agent.session.environment.connected'
+            and event.get('recv_ns', 0) > run['fault_record']['t_inject_ns']
+        )
+    ]
+    events_path.write_text('\n'.join(json.dumps(event) for event in events) + '\n')
+    result = await replay(tmp_path, speed=1_000_000)
+    assert result['status'] == 'FAIL'
+
+
+@pytest.mark.asyncio
+async def test_f1_replay_deterministic_fail_survives_missing_artifact(tmp_path):
+    import shutil
+
+    shutil.copytree(FIXTURE, tmp_path, dirs_exist_ok=True)
+    run_path = tmp_path / 'run.json'
+    run = json.loads(run_path.read_text())
+    run['status'] = 'WARN'
+    run['fault_record']['recovery_error'] = 'TimeoutError'
+    run_path.write_text(json.dumps(run))
+    (tmp_path / 'items.json').unlink()
+
+    result = await replay(tmp_path, speed=1_000_000)
+    assert result['status'] == 'FAIL'
+    assert 'items.json' in result['missing_evidence']
 
 
 def test_cli_replay_needs_no_credentials_or_network(monkeypatch):
