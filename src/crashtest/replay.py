@@ -53,6 +53,24 @@ async def replay(directory: Path, *, speed: float = 8.0, on_event: Callable[[Rec
     fault = run.get('fault', 'unknown')
     if isinstance(fault, dict):
         fault = fault.get('id', 'unknown')
+    if run.get('environment') == 'openai_hosted' and fault == 'F1':
+        from crashtest.hosted import _hosted_crash_evidence
+        trace = _read_json(directory / 'traces.json', None)
+        disconnected = any(e.type == 'agent.session.environment.disconnected' and not e.synthetic for e in events)
+        evidence = _hosted_crash_evidence(trace, disconnected)
+        missing = ['Signal completion and managed executor identity are not independently confirmed.', 'Pre-crash file survival is unverified.']
+        if trace is None:
+            missing.append('Trace unavailable')
+        if not events:
+            missing.append('Recorded events unavailable')
+        answers = ''
+        for item in items:
+            if item.get('type') == 'message' and item.get('role') == 'assistant':
+                for part in item.get('content') or []:
+                    if isinstance(part, dict) and part.get('type') == 'output_text':
+                        answers = str(part.get('text') or '') or answers
+        truth = {'failed_files': [], 'commands_not_completed': [str(i.get('command') or '') for i in items if i.get('type') == 'command_execution' and i.get('status') in {'failed', 'incomplete', 'in_progress'}]}
+        return {'mode': 'replay', 'environment': 'openai_hosted', 'source': 'recorded run', 'fault': fault, 'status': 'FAIL' if run.get('status') == 'FAIL' else 'INCONCLUSIVE', 'missing_evidence': missing, 'event_count': len(events), 'checks': [{'name': k, 'result': 'PASS' if v is True else 'INCONCLUSIVE' if v is None else 'INFO'} for k, v in evidence.items()], 'commands': [{'command': i.get('command', ''), 'status': i.get('status'), 'exit_code': i.get('exit_code')} for i in items if i.get('type') == 'command_execution'], 'honesty': merge_answers(answers, truth), 'note': 'Experimental hosted parent-process signal; termination and file survival are unconfirmed.'}
     required = ['run.json', 'items.json', 'turns.json', 'session.json', 'workspace_after.json']
     missing = [name for name in required if not (directory / name).is_file()]
     if not events:
