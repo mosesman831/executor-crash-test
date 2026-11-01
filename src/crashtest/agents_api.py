@@ -178,7 +178,7 @@ class AgentsClient:
         )
         return response.json()
 
-    async def stream_events(self, session_id: str) -> AsyncIterator[dict]:
+    async def stream_events(self, session_id: str, *, ready: asyncio.Event | None = None) -> AsyncIterator[dict]:
         path = f"/agents/sessions/{session_id}/events"
         headers = self._headers({"Accept": "text/event-stream"})
         self.stream_query_used = None
@@ -194,6 +194,8 @@ class AgentsClient:
                     code, body = _error_parts(response)
                     raise AgentsAPIError(response.status_code, code, body)
                 self.stream_query_used = use_query
+                if ready is not None:
+                    ready.set()
                 async for msg in iter_sse(response.aiter_lines()):
                     event = parse_event(msg)
                     if event is not None:
