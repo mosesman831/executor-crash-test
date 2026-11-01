@@ -84,3 +84,13 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory demo
 ```
 
 Open `http://127.0.0.1:8000/` and use the buttons to advance through the five steps. The page includes redacted trace and event downloads. The repository also includes the `crash-test-run` Codex skill under `.agents/skills/` for running an approved preset and explaining its report.
+
+### Live local demo
+
+The live demo starts only the fixed OpenAI-hosted F1 scenario. It keeps the application key in the local server, streams redacted events and fetches the saved trace. It does not accept custom commands. From the repository root, run:
+
+```bash
+node --env-file=.env demo/live/local.mjs
+```
+
+Open the loopback URL it prints. The test uses the configured application key and `gpt-6-luna`. After inspecting the evidence, use **End session** to delete the disposable hosted session. Each run uses API credits.
