@@ -194,21 +194,53 @@ async def test_f1_fault_runs_while_input_post_is_pending(tmp_path, monkeypatch):
 def test_f1_status_requires_evidence_and_attribution():
     from types import SimpleNamespace as NS
     record = {'triggered': True, 'marker_observed': True, 't_inject_ns': 10}
-    survival = NS(never_created=[], unknown=[], lost=[], changed=[])
-    metrics = NS(turn_status='completed', command_evidence_complete=True, survival=survival, missed_items_count=0)
-    assert runner._f1_status(metrics, record, []) == 'WARN'
+    survival = NS(never_created=[], unknown=[], lost=[], changed=[], evidence_complete=True)
+    command = NS(fault_window=True, item_id='cmd', status='incomplete', exit_code=None)
+    metrics = NS(turn_status='completed', commands=[command], survival=survival, missed_items_count=0, disconnect_event_seen=True, reconnect_ms=30000, reconnect_censored=False, reconnect_censor_ms=None)
+    assert runner._f1_status(metrics, record, []) == 'PASS'
     metrics.turn_status = None
     assert runner._f1_status(metrics, record, []) == 'INCONCLUSIVE'
     metrics.turn_status = 'completed'
-    metrics.command_evidence_complete = False
+    metrics.commands = []
     assert runner._f1_status(metrics, record, []) == 'INCONCLUSIVE'
-    metrics.command_evidence_complete = True
+    metrics.commands = [command]
     survival.lost = ['step1.txt']
     assert runner._f1_status(metrics, record, [], stream_available=True) == 'FAIL'
     event = NS(recv_ns=11, item_type='command_execution', type='agent.session.turn.item.added')
     assert runner._f1_status(metrics, record, [event]) == 'WARN'
     metrics.missed_items_count = 1
     assert runner._f1_status(metrics, record, []) == 'WARN'
+
+
+def test_f1_reconnect_thresholds_censor_and_null_exit():
+    from types import SimpleNamespace as NS
+    command = NS(fault_window=True, item_id='cmd', status='incomplete', exit_code=None)
+    survival = NS(never_created=[], unknown=[], lost=[], changed=[], evidence_complete=True)
+    metrics = NS(turn_status='completed', commands=[command], survival=survival, missed_items_count=0, disconnect_event_seen=True, reconnect_ms=30000, reconnect_censored=False, reconnect_censor_ms=None)
+    record = {'triggered': True, 'marker_observed': True, 't_inject_ns': 10}
+    assert runner._f1_status(metrics, record, []) == 'PASS'
+    metrics.reconnect_ms = 30001
+    assert runner._f1_status(metrics, record, []) == 'WARN'
+    metrics.reconnect_ms = 120000
+    assert runner._f1_status(metrics, record, []) == 'WARN'
+    metrics.reconnect_ms = 120001
+    assert runner._f1_status(metrics, record, []) == 'FAIL'
+    metrics.reconnect_ms = None
+    metrics.reconnect_censored = True
+    metrics.reconnect_censor_ms = 300000
+    check = next(c for c in runner._f1_checks(metrics, record, []) if c['name'] == 'reconnect_ms')
+    assert check['result'] == 'INCONCLUSIVE' and check['observed']['censor_ms'] == 300000
+    assert runner._f1_status(metrics, record, []) == 'INCONCLUSIVE'
+    metrics.reconnect_ms = 1000
+    metrics.disconnect_event_seen = False
+    assert runner._f1_status(metrics, record, []) == 'WARN'
+    metrics.disconnect_event_seen = True
+    command.status = 'completed'
+    assert runner._f1_status(metrics, record, []) == 'INCONCLUSIVE'
+    command.status = 'in_progress'
+    assert runner._f1_status(metrics, record, []) == 'INCONCLUSIVE'
+    metrics.turn_status = 'waiting'
+    assert runner._f1_status(metrics, record, []) == 'INCONCLUSIVE'
 
 
 @pytest.mark.asyncio
