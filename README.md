@@ -51,6 +51,8 @@ uv run crashtest replay fixtures/f1_demo --speed 8 --output ./replay-report
 
 ## Isolation and evidence
 
+Process cleanup is best effort on the current machine because it has no dedicated `crashexec` user.
+
 Run this on disposable compute. The executor can run shell commands and write files. The child environment is restricted, but same-user processes may still read each other's environment through `/proc`; use separate users or containers to isolate the application key. The default process-group kill is best effort: sandboxed descendants can escape that group, so it is not proof that an entire machine or container stopped. A dedicated executor user or a container or cgroup can provide a stronger boundary.
 
 Events, logs and reports are redacted, and report files omit URLs. Redaction is a precaution, not a guarantee: inspect artefacts before sharing them. Separate the application key from the executor container in CI, use scoped credentials and revoke them when no longer needed.
