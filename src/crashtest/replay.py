@@ -68,7 +68,29 @@ async def replay(directory: Path, *, speed: float = 8.0, on_event: Callable[[Rec
             missing.append('confirmed fault trigger')
         if not metrics.evidence_complete:
             missing.extend(metrics.inconclusive_reasons)
-        status = 'FAIL' if run.get('status') == 'FAIL' else 'INCONCLUSIVE' if missing else 'WARN'
+        # Reuse the live deterministic F1 check implementation. Replay has no
+        # running stream, so never assume the stream was still active at settle;
+        # file-loss attribution requiring that observation stays WARN.
+        from crashtest.runner import _f1_checks
+
+        f1_checks = _f1_checks(metrics, fault_record, events, stream_available=False)
+        metrics_result['f1_checks'] = f1_checks
+        metrics_result['stream_available_at_settle'] = None
+        metrics_result['stream_availability_basis'] = 'not_observed_in_replay'
+        check_results = {check.get('result') for check in f1_checks}
+        recomputed_status = next(
+            (result for result in ('FAIL', 'INCONCLUSIVE', 'WARN') if result in check_results),
+            'PASS',
+        )
+        # A recorded live FAIL is evidence already established by the run and
+        # a deterministic FAIL found during replay must not be softened by
+        # unrelated missing artifacts.
+        if run.get('status') == 'FAIL' or recomputed_status == 'FAIL':
+            status = 'FAIL'
+        elif missing:
+            status = 'INCONCLUSIVE'
+        else:
+            status = recomputed_status
     elif fault in {'F0', 'F3'}:
         root = next((turn for turn in turns if turn.get('subagent_id') is None), None)
         root_status = root.get('status') if root else None

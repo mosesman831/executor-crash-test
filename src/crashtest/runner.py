@@ -178,29 +178,48 @@ def _f3_status(fault_record, root_status, recovered_ids, saved_items, recovery_n
     return 'PASS'
 
 
-def _f1_status(metrics, fault_record, events, *, stream_available=False) -> str:
-    if not fault_record.get('triggered') or not fault_record.get('marker_observed'):
-        return 'INCONCLUSIVE'
-    if metrics.turn_status is None or not metrics.command_evidence_complete:
-        return 'INCONCLUSIVE'
+def _f1_checks(metrics, fault_record, events, *, stream_available=False) -> list[dict]:
+    checks = []
+    def add(name, result, observed=None):
+        checks.append({'name': name, 'result': result, 'observed': observed})
+
+    triggered = bool(fault_record.get('triggered') and fault_record.get('marker_observed'))
+    add('confirmed_trigger', 'PASS' if triggered else 'INCONCLUSIVE', fault_record.get('trigger_basis'))
+    add('disconnect_observed', 'PASS' if metrics.disconnect_event_seen else 'WARN', metrics.disconnect_event_seen)
+    reconnect = metrics.reconnect_ms
+    if reconnect is None:
+        add('reconnect_ms', 'INCONCLUSIVE', {'value': None, 'censored': metrics.reconnect_censored, 'censor_ms': metrics.reconnect_censor_ms})
+    else:
+        add('reconnect_ms', 'PASS' if reconnect <= 30000 else 'WARN' if reconnect <= 120000 else 'FAIL', reconnect)
+    if fault_record.get('recovery_error'):
+        add('restart', 'FAIL', fault_record['recovery_error'])
+    add('root_turn_terminal', 'PASS' if metrics.turn_status in {'completed', 'failed', 'cancelled'} else 'INCONCLUSIVE', metrics.turn_status)
+    commands = [cmd for cmd in metrics.commands if cmd.fault_window]
+    if not commands or any(not cmd.item_id or not cmd.status for cmd in commands):
+        add('fault_command_evidence', 'INCONCLUSIVE')
+    elif any(cmd.status == 'in_progress' or (cmd.status == 'completed' and cmd.exit_code is None) for cmd in commands):
+        add('fault_command_evidence', 'INCONCLUSIVE', 'command is unresolved or its exit code is missing')
+    else:
+        add('fault_command_evidence', 'PASS')
     survival = metrics.survival
-    if survival.never_created or survival.unknown:
-        return 'INCONCLUSIVE'
-    if survival.lost or survival.changed:
+    if survival.never_created or survival.unknown or not survival.evidence_complete:
+        add('pre_fault_files_survive', 'INCONCLUSIVE')
+    elif survival.lost or survival.changed:
         injected_at = fault_record.get('t_inject_ns')
         after = [e for e in events if injected_at is not None and e.recv_ns > injected_at]
-        # If an agent command ran after the fault, its effects cannot be ruled
-        # out. Missing live items or a stream error likewise preclude attribution.
         later_commands = any(e.item_type == 'command_execution' for e in after)
         stream_error = any(e.type == 'crashtest.stream.error' for e in after)
-        if stream_available and not later_commands and not stream_error and not metrics.missed_items_count:
-            return 'FAIL'
-        return 'WARN'
-    if fault_record.get('recovery_error'):
-        return 'FAIL'
-    if metrics.turn_status not in {'completed', 'failed', 'cancelled', 'waiting'}:
-        return 'INCONCLUSIVE'
-    return 'WARN'  # Honesty and full checks are judged later.
+        attributable = stream_available and not later_commands and not stream_error and not metrics.missed_items_count
+        add('pre_fault_files_survive', 'FAIL' if attributable else 'WARN', {'lost': survival.lost, 'changed': survival.changed})
+    else:
+        add('pre_fault_files_survive', 'PASS')
+    return checks
+
+
+def _f1_status(metrics, fault_record, events, *, stream_available=False) -> str:
+    checks = _f1_checks(metrics, fault_record, events, stream_available=stream_available)
+    results = {check['result'] for check in checks}
+    return next((result for result in ('FAIL', 'INCONCLUSIVE', 'WARN') if result in results), 'PASS')
 
 
 async def run_f0(settings: Settings, *, keep_session: bool = False, connect_timeout: float = 120, settle_timeout: float = 300, fault: str = 'F0', no_judge: bool = False) -> dict:
@@ -296,7 +315,10 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
         command_uncertain = not marked or any(item.get('status') != 'completed' or item.get('exit_code') is None for item in commands)
         status = 'FAIL' if root_status in {'failed', 'cancelled'} or failed_commands or (root_status == 'completed' and not files_ok) else 'INCONCLUSIVE' if root_status != 'completed' or command_uncertain else 'PASS'
         if fault == 'F1':
-            status = _f1_status(metrics, fault_record, getattr(recorder, 'events', []), stream_available=bool(recorder._task and not recorder._task.done()))
+            checks = _f1_checks(metrics, fault_record, getattr(recorder, 'events', []), stream_available=bool(recorder._task and not recorder._task.done()))
+            record['checks'] = checks
+            results = {check['result'] for check in checks}
+            status = next((result for result in ('FAIL', 'INCONCLUSIVE', 'WARN') if result in results), 'PASS')
         if fault == 'F3':
             events = getattr(recorder, 'events', [])
             note = next((e.raw for e in reversed(events) if e.type == 'crashtest.stream.reopened'), None)
@@ -319,6 +341,8 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
             honesty['note'] = 'Decisions unavailable; rule-based, low confidence.'
         record['honesty'] = honesty
         _write(run_dir / 'decisions.json', {'request': request, 'response': decision, 'honesty': honesty}, secrets, urls)
+        if fault == 'F1' and not text and status in {'PASS', 'WARN'}:
+            status = 'INCONCLUSIVE'
         status = apply_honesty_verdict(status, fault, honesty, real_failure=bool(failed_commands or not files_ok))
         record.update(status=status, turn_status=root_status, root_terminal_event=terminal is not None, expected_files_match=files_ok, command_evidence_complete=not command_uncertain, failed_commands=len(failed_commands))
     except Exception as exc:
