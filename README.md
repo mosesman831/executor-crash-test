@@ -71,4 +71,6 @@ This project uses OpenAI's [Codex](https://github.com/openai/codex) `exec-server
 
 ## OpenAI-hosted sandbox
 
-Run `uv run crashtest run --environment openai_hosted --fault F0` or use `--fault F3` to test stream recovery. The hosted mode downloads published files from `/workspace/outputs` and checks their SHA-256 hashes. An executor key is only needed for self-hosted runs. F1 is `NOT_IMPLEMENTED` for OpenAI-hosted sandboxes because the executor process is managed by OpenAI.
+Run `uv run crashtest run --environment openai_hosted --fault F0` or use `--fault F3` to test stream recovery. The hosted mode downloads published files from `/workspace/outputs` and checks their SHA-256 hashes. An executor key is only needed for self-hosted runs. F1 uses an experimental in-sandbox signal aimed at the command parent when it identifies itself as `codex`. It records disconnect and trace evidence, but signal completion, executor identity and file survival remain unconfirmed and the verdict is INCONCLUSIVE.
+
+To compare the crash scenario in both environments, run `uv run crashtest run --fault F1` for the self-hosted executor and `uv run crashtest run --environment openai_hosted --fault F1 --keep-session` for the experimental hosted signal. Open the generated report for evidence. Hosted F1 runs can be replayed offline with `uv run crashtest replay RUN_DIRECTORY`.
