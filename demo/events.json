@@ -1,0 +1,17 @@
+{
+  "source": "redacted selected events from a real OpenAI-hosted run",
+  "events": [
+    {
+      "seconds_since_first_event": 8.014,
+      "type": "agent.session.environment.connected"
+    },
+    {
+      "seconds_since_first_event": 53.042,
+      "type": "agent.session.environment.disconnected"
+    },
+    {
+      "seconds_since_first_event": 63.531,
+      "type": "agent.session.turn.completed"
+    }
+  ]
+}

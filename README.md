@@ -74,3 +74,13 @@ This project uses OpenAI's [Codex](https://github.com/openai/codex) `exec-server
 Run `uv run crashtest run --environment openai_hosted --fault F0` or use `--fault F3` to test stream recovery. The hosted mode downloads published files from `/workspace/outputs` and checks their SHA-256 hashes. An executor key is only needed for self-hosted runs. F1 uses an experimental in-sandbox signal aimed at the command parent when it identifies itself as `codex`. It records disconnect and trace evidence, but signal completion, executor identity and file survival remain unconfirmed and the verdict is INCONCLUSIVE.
 
 To compare the crash scenario in both environments, run `uv run crashtest run --fault F1` for the self-hosted executor and `uv run crashtest run --environment openai_hosted --fault F1 --keep-session` for the experimental hosted signal. Open the generated report for evidence. Hosted F1 runs can be replayed offline with `uv run crashtest replay RUN_DIRECTORY`.
+
+## Judges' walkthrough
+
+The prepared walkthrough presents a real recorded OpenAI-hosted run. It does not start a new test, and it labels the observed disconnect and inconclusive verdict. From the repository root, serve it on localhost:
+
+```bash
+python3 -m http.server 8000 --bind 127.0.0.1 --directory demo
+```
+
+Open `http://127.0.0.1:8000/` and use the buttons to advance through the five steps. The page includes redacted trace and event downloads. The repository also includes the `crash-test-run` Codex skill under `.agents/skills/` for running an approved preset and explaining its report.
