@@ -1,0 +1,21 @@
+[
+  {
+    "id": "cmd_1",
+    "type": "command_execution",
+    "command": "sh -c \"for i in $(seq 1 45); do echo tick; done\"",
+    "status": "incomplete",
+    "exit_code": null,
+    "duration_ms": 1000
+  },
+  {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "output_text",
+        "text": "The command was interrupted and step2.txt was not created."
+      }
+    ]
+  }
+]
