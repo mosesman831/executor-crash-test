@@ -94,3 +94,7 @@ node --env-file=.env demo/live/local.mjs
 ```
 
 Open the loopback URL it prints. The test uses the configured application key and `gpt-6-luna`. After inspecting the evidence, use **End session** to delete the disposable hosted session. Each run uses API credits.
+
+### Codex and the live demo
+
+The private live Site exposes an MCP server with `start_test`, `get_run_status`, `get_report` and `end_test`. The Site owner can install its plugin under Plugins → Personal → Created by you. Open the live page before asking Codex to start hosted F0 or F1; the page detects the same run and shows events received after it connects. Saved evidence is used to check the result, including when the page joins late. The MCP tools only accept preset scenarios and do not expose API keys or arbitrary commands. End the session after reviewing the evidence.
