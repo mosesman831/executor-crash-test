@@ -218,3 +218,8 @@ async def test_kill_uses_process_group_and_monotonic_timestamp_without_user_pkil
     assert await supervisor.kill() == 987654321
     assert seen == [(123, 9)]
     assert supervisor.state == ExecutorState.KILLED
+
+
+def test_redact_unlisted_key_pattern():
+    prefix = "s" + "k-"
+    assert redact(prefix + "a" * 16 + " " + prefix + "short") == "[REDACTED] " + prefix + "short"
