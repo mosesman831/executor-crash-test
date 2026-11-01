@@ -159,6 +159,7 @@ class AgentsClient:
     async def _pages(self, path: str, params: dict) -> list[dict]:
         items: list[dict] = []
         query = dict(params)
+        cursors: set[str] = set()
         while True:
             response = await self._request("GET", path, params=query)
             body = response.json()
@@ -166,8 +167,9 @@ class AgentsClient:
             if not body.get("has_more"):
                 return items
             last_id = body.get("last_id")
-            if not last_id:
-                return items
+            if not isinstance(last_id, str) or not last_id.strip() or last_id in cursors:
+                raise ValueError("pagination response has no advancing cursor")
+            cursors.add(last_id)
             query["after"] = last_id
 
     async def create_decision(self, request: dict) -> dict:

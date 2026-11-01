@@ -127,6 +127,55 @@ async def _inject_f1(client, recorder, executor, session_id, ws, run_dir, secret
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _inject_f3(recorder, *, trigger_timeout=300.0, delay_s=2.0, drop_s=20.0, recovery_timeout=120.0):
+    async def next_or_terminal(predicate, timeout):
+        match = asyncio.create_task(recorder.wait_for(predicate, timeout))
+        terminal = asyncio.create_task(recorder.wait_for(is_root_terminal, timeout))
+        try:
+            done, _ = await asyncio.wait((match, terminal), return_when=asyncio.FIRST_COMPLETED)
+            if terminal in done and terminal.result() is not None:
+                return None
+            return match.result() if match in done else None
+        finally:
+            for task in (match, terminal):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(match, terminal, return_exceptions=True)
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + trigger_timeout
+    command = await next_or_terminal(lambda e: e.type == 'agent.session.turn.item.added' and e.item_type == 'command_execution', trigger_timeout)
+    if command is None:
+        return {'triggered': False, 'reason': 'command_trigger_missing'}
+    later = await next_or_terminal(lambda e: e.type == 'agent.session.turn.item.added' and e.seq > command.seq, max(0, deadline - loop.time()))
+    if later is None:
+        return {'triggered': False, 'reason': 'subsequent_item_trigger_missing'}
+    terminal = await recorder.wait_for(is_root_terminal, delay_s)
+    if terminal is not None:
+        return {'triggered': False, 'reason': 'root_terminal_before_drop'}
+    t_inject = await recorder.drop()
+    recorder.record_synthetic('crashtest.fault.injected', {'fault_id': 'F3', 't_inject_ns': t_inject, 'trigger_event_seq': later.seq})
+    await asyncio.sleep(drop_s)
+    t_recover_start = Clock.monotonic_ns()
+    state = await asyncio.wait_for(recorder.recover_from_items(), timeout=recovery_timeout)
+    return {'triggered': True, 'trigger_basis': 'event', 'trigger_event_seq': later.seq, 't_inject_ns': t_inject, 't_recover_start_ns': t_recover_start, 't_recover_done_ns': Clock.monotonic_ns(), 'recovered_item_ids': sorted(state)}
+
+
+def _f3_status(fault_record, root_status, recovered_ids, saved_items, recovery_note, stream_available, baseline_status):
+    if not fault_record.get('triggered') or recovery_note is None or 'required_actions' not in recovery_note or not stream_available:
+        return 'INCONCLUSIVE'
+    if root_status is None or root_status not in {'completed', 'failed', 'cancelled'}:
+        return 'INCONCLUSIVE'
+    ids = [item.get('id') for item in saved_items]
+    if any(not isinstance(item_id, str) or not item_id for item_id in ids):
+        return 'INCONCLUSIVE'
+    if set(recovered_ids) != set(ids) or baseline_status == 'FAIL':
+        return 'FAIL'
+    if baseline_status != 'PASS':
+        return 'INCONCLUSIVE'
+    return 'PASS'
+
+
 def _f1_status(metrics, fault_record, events, *, stream_available=False) -> str:
     if not fault_record.get('triggered') or not fault_record.get('marker_observed'):
         return 'INCONCLUSIVE'
@@ -153,7 +202,7 @@ def _f1_status(metrics, fault_record, events, *, stream_available=False) -> str:
 
 
 async def run_f0(settings: Settings, *, keep_session: bool = False, connect_timeout: float = 120, settle_timeout: float = 300, fault: str = 'F0') -> dict:
-    if fault not in {'F0', 'F1'}:
+    if fault not in {'F0', 'F1', 'F3'}:
         raise ValueError('unsupported fault')
     run_id = 'run_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:8] + '_' + fault.lower()
     root = settings.crashtest_root.resolve()
@@ -173,7 +222,7 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
     recorder = None
     send_task = None
     try:
-        session = await client.create_session(model=settings.crashtest_agent_model, instructions=INSTRUCTIONS, workspace_directory=str(ws), metadata={'crashtest_run_id': run_id, 'crashtest_fault': f'{fault}_' + ('baseline' if fault == 'F0' else 'kill_mid_command')})
+        session = await client.create_session(model=settings.crashtest_agent_model, instructions=INSTRUCTIONS, workspace_directory=str(ws), metadata={'crashtest_run_id': run_id, 'crashtest_fault': f'{fault}_' + {'F0': 'baseline', 'F1': 'kill_mid_command', 'F3': 'stream_drop'}[fault]})
         session_id = session.get('id')
         if not session_id:
             raise RuntimeError('session response missing id')
@@ -191,9 +240,9 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
         connected = await recorder.wait_for(lambda e: e.type in {'agent.session.environment.connected', 'agent.session.environment.failed', 'agent.session.failed'}, connect_timeout)
         if connected is None or connected.type != 'agent.session.environment.connected':
             raise RuntimeError('environment did not connect')
-        if fault == 'F1':
+        if fault in {'F1', 'F3'}:
             send_task = asyncio.create_task(client.send_message(session_id, SCENARIO, key))
-            injection = asyncio.create_task(_inject_f1(client, recorder, executor, session_id, ws, run_dir, secrets, urls))
+            injection = asyncio.create_task(_inject_f1(client, recorder, executor, session_id, ws, run_dir, secrets, urls) if fault == 'F1' else _inject_f3(recorder, trigger_timeout=settle_timeout))
             done, _ = await asyncio.wait((send_task, injection), return_when=asyncio.FIRST_COMPLETED)
             if send_task in done:
                 try:
@@ -208,7 +257,7 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
         else:
             await client.send_message(session_id, SCENARIO, key)
         terminal = None
-        elapsed = ((Clock.monotonic_ns() - fault_record['t_inject_ns']) / 1e9 if fault == 'F1' and fault_record.get('t_inject_ns') else 0)
+        elapsed = ((Clock.monotonic_ns() - fault_record['t_inject_ns']) / 1e9 if fault in {'F1', 'F3'} and fault_record.get('t_inject_ns') else 0)
         deadline = asyncio.get_running_loop().time() + max(0, settle_timeout - elapsed)
         while asyncio.get_running_loop().time() < deadline:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -220,7 +269,7 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
                 polled_turns = await client.list_turns(session_id)
                 if polled_session.get('status') == 'failed' or any(t.get('subagent_id') is None and t.get('status') in {'completed', 'failed', 'cancelled'} for t in polled_turns):
                     break
-        if fault == 'F1':
+        if fault in {'F1', 'F3'}:
             fault_record['t_observe_end_ns'] = Clock.monotonic_ns()
         session = await client.retrieve_session(session_id)
         turns = await client.list_turns(session_id)
@@ -245,6 +294,16 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
         status = 'FAIL' if root_status in {'failed', 'cancelled'} or failed_commands or (root_status == 'completed' and not files_ok) else 'INCONCLUSIVE' if root_status != 'completed' or command_uncertain else 'PASS'
         if fault == 'F1':
             status = _f1_status(metrics, fault_record, getattr(recorder, 'events', []), stream_available=bool(recorder._task and not recorder._task.done()))
+        if fault == 'F3':
+            events = getattr(recorder, 'events', [])
+            note = next((e.raw for e in reversed(events) if e.type == 'crashtest.stream.reopened'), None)
+            state = getattr(recorder, 'recovered_state', None)
+            recovered_ids = sorted(state) if state is not None else fault_record.get('recovered_item_ids', [])
+            status = _f3_status(fault_record, root_status, recovered_ids, items, note, bool(recorder._task and not recorder._task.done()), status)
+            live_ids = {e.item_id for e in events if e.item_id and not e.synthetic}
+            saved_ids = {item['id'] for item in items if item.get('id')}
+            record['stream_recovery'] = {'reconstructed_item_ids': recovered_ids, 'settle_item_ids': sorted(saved_ids), 'saved_items_not_seen_live': len(saved_ids - live_ids), 'intermediate_events_missed': None, 'intermediate_events_reason': 'not_reconstructable_from_saved_items', 'required_actions': note.get('required_actions') if note else None, 'buffered_events': note.get('buffered_events') if note else None, 'buffered_applied': note.get('buffered_applied') if note else None, 'buffered_final_discarded': note.get('buffered_final_discarded') if note else None}
+            _write(run_dir / 'stream_recovery.json', record['stream_recovery'], secrets, urls)
         record.update(status=status, turn_status=root_status, root_terminal_event=terminal is not None, expected_files_match=files_ok, command_evidence_complete=not command_uncertain, failed_commands=len(failed_commands))
     except Exception as exc:
         record.update(status='ERROR', error=type(exc).__name__)
