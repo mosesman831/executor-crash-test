@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
 
+_KEY_RE = re.compile(r"sk-[A-Za-z0-9_-]{16,}")
 _URL_RE = re.compile(r"(?:https?|wss?)://[^\s\"'<>]+", re.IGNORECASE)
 
 
@@ -34,7 +35,7 @@ def redact(
 
     for secret in sorted((value for value in secrets if value), key=len, reverse=True):
         result = result.replace(secret, "[REDACTED]")
-    return result
+    return _KEY_RE.sub("[REDACTED]", result)
 
 
 def _without_url_credentials(value: str) -> str:
