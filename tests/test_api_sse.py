@@ -130,3 +130,32 @@ async def test_decision_has_no_beta_header():
         assert json.loads(request.content) == payload
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('last_id', [None, '', '   ', 1])
+@respx.mock
+async def test_pagination_rejects_missing_cursor(last_id):
+    respx.get(f'{BASE}/agents/sessions/sess_x/items').respond(200, json={'data': [{'id': 'a'}], 'has_more': True, 'last_id': last_id})
+    client = AgentsClient(SecretStr('secret'))
+    try:
+        with pytest.raises(ValueError, match='advancing cursor'):
+            await client.list_items('sess_x')
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pagination_rejects_repeated_cursor():
+    route = respx.get(f'{BASE}/agents/sessions/sess_x/items').mock(side_effect=[
+        httpx.Response(200, json={'data': [{'id': 'a'}], 'has_more': True, 'last_id': 'a'}),
+        httpx.Response(200, json={'data': [{'id': 'a'}], 'has_more': True, 'last_id': 'a'}),
+    ])
+    client = AgentsClient(SecretStr('secret'))
+    try:
+        with pytest.raises(ValueError, match='advancing cursor'):
+            await client.list_items('sess_x')
+        assert route.call_count == 2
+    finally:
+        await client.aclose()

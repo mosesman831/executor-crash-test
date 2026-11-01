@@ -15,10 +15,10 @@ def main() -> None:
 
 
 @app.command()
-def run(fault: str = typer.Option(..., help='Fault identifier (F0 or F1).'), keep_session: bool = False) -> None:
+def run(fault: str = typer.Option(..., help='Fault identifier (F0, F1 or F3).'), keep_session: bool = False) -> None:
     """Run a baseline scenario."""
-    if fault.upper() not in {'F0', 'F1'}:
-        typer.echo('Only F0 and F1 are currently available.', err=True)
+    if fault.upper() not in {'F0', 'F1', 'F3'}:
+        typer.echo('Only F0, F1 and F3 are currently available.', err=True)
         raise typer.Exit(3)
     try:
         result = asyncio.run(run_f0(load_settings(), keep_session=keep_session, fault=fault.upper()))

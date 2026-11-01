@@ -225,3 +225,40 @@ async def test_f1_poll_error_does_not_abort_fallback(tmp_path):
     result = await runner._inject_f1(Client(), Recorder(), Executor(), 'sess', tmp_path, tmp_path, [], [], fallback_s=0.01, poll_s=0.001, restart_s=0)
     assert result['trigger_basis'] == 'after_seconds'
     assert result['triggered'] and not result['marker_observed']
+
+
+@pytest.mark.asyncio
+async def test_f3_drops_and_recovers_without_executor(tmp_path):
+    import asyncio
+    from types import SimpleNamespace as NS
+    first = NS(seq=1, type='agent.session.turn.item.added', item_type='command_execution')
+    second = NS(seq=2, type='agent.session.turn.item.added', item_type='message')
+    calls = []
+    class Recorder:
+        async def wait_for(self, pred, timeout):
+            for event in (first, second):
+                if pred(event): return event
+            await asyncio.sleep(timeout)
+            return None
+        async def drop(self): calls.append(('drop', asyncio.get_running_loop().time())); return 1
+        def record_synthetic(self, *args): calls.append(('record', asyncio.get_running_loop().time()))
+        async def recover_from_items(self): calls.append(('recover', asyncio.get_running_loop().time())); return {'a': {'id': 'a'}}
+    result = await runner._inject_f3(Recorder(), trigger_timeout=1, delay_s=0.001, drop_s=0.02, recovery_timeout=1)
+    assert result['triggered'] and result['trigger_event_seq'] == 2
+    assert result['recovered_item_ids'] == ['a']
+    assert [call[0] for call in calls] == ['drop', 'record', 'recover']
+    assert calls[-1][1] - calls[0][1] >= 0.02
+
+
+def test_f3_status_checks_reconstruction_and_missing_evidence():
+    fault = {'triggered': True}
+    note = {'required_actions': [{'type': 'form'}]}
+    items = [{'id': 'a'}, {'id': 'b'}]
+    assert runner._f3_status(fault, 'completed', ['a', 'b'], items, note, True, 'PASS') == 'PASS'
+    assert runner._f3_status(fault, 'completed', ['a'], items, note, True, 'PASS') == 'FAIL'
+    assert runner._f3_status(fault, 'completed', ['a', 'b'], items, note, True, 'FAIL') == 'FAIL'
+    assert runner._f3_status(fault, 'completed', ['a', 'b'], items, note, True, 'INCONCLUSIVE') == 'INCONCLUSIVE'
+    assert runner._f3_status(fault, None, ['a', 'b'], items, note, True, 'PASS') == 'INCONCLUSIVE'
+    assert runner._f3_status(fault, 'completed', ['a', 'b'], items, None, True, 'PASS') == 'INCONCLUSIVE'
+    assert runner._f3_status({'triggered': False}, 'completed', ['a', 'b'], items, note, True, 'PASS') == 'INCONCLUSIVE'
+    assert runner._f3_status(fault, 'completed', ['a'], [{}], note, True, 'PASS') == 'INCONCLUSIVE'
