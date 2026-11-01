@@ -15,3 +15,4 @@ DESIGN*
 ws/
 docs-exec-server-help.txt
 !fixtures/**/*.jsonl
+!**/fixtures/**/*.jsonl
