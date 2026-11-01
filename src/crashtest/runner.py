@@ -163,6 +163,18 @@ async def _inject_f3(recorder, *, trigger_timeout=300.0, delay_s=2.0, drop_s=20.
     return {'triggered': True, 'trigger_basis': 'event', 'trigger_event_seq': later.seq, 't_inject_ns': t_inject, 't_recover_start_ns': t_recover_start, 't_recover_done_ns': Clock.monotonic_ns(), 'recovered_item_ids': sorted(state)}
 
 
+def _reconcile_settled_items(state: dict[str, dict], items: list[dict]) -> list[str]:
+    """Merge items now available at settle and return IDs absent from recovery snapshot."""
+    added = []
+    for item in items:
+        item_id = item.get("id")
+        if isinstance(item_id, str) and item_id:
+            if item_id not in state:
+                added.append(item_id)
+            state[item_id] = dict(item)
+    return sorted(added)
+
+
 def _f3_status(fault_record, root_status, recovered_ids, saved_items, recovery_note, stream_available, baseline_status):
     if not fault_record.get('triggered') or recovery_note is None or 'required_actions' not in recovery_note or not stream_available:
         return 'INCONCLUSIVE'
@@ -323,11 +335,16 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
             events = getattr(recorder, 'events', [])
             note = next((e.raw for e in reversed(events) if e.type == 'crashtest.stream.reopened'), None)
             state = getattr(recorder, 'recovered_state', None)
-            recovered_ids = sorted(state) if state is not None else fault_record.get('recovered_item_ids', [])
+            recovery_snapshot_ids = sorted(state) if state is not None else fault_record.get('recovered_item_ids', [])
+            # Reconcile the recovered state with saved items available at settle.
+            # The API can expose an item after the first recovery snapshot; record
+            # those late IDs explicitly instead of silently calling them stream events.
+            reconciled_ids = _reconcile_settled_items(state, items) if state is not None else []
+            recovered_ids = sorted(state) if state is not None else recovery_snapshot_ids
             status = _f3_status(fault_record, root_status, recovered_ids, items, note, bool(recorder._task and not recorder._task.done()), status)
             live_ids = {e.item_id for e in events if e.item_id and not e.synthetic}
             saved_ids = {item['id'] for item in items if item.get('id')}
-            record['stream_recovery'] = {'reconstructed_item_ids': recovered_ids, 'settle_item_ids': sorted(saved_ids), 'saved_items_not_seen_live': len(saved_ids - live_ids), 'intermediate_events_missed': None, 'intermediate_events_reason': 'not_reconstructable_from_saved_items', 'required_actions': note.get('required_actions') if note else None, 'buffered_events': note.get('buffered_events') if note else None, 'buffered_applied': note.get('buffered_applied') if note else None, 'buffered_final_discarded': note.get('buffered_final_discarded') if note else None}
+            record['stream_recovery'] = {'recovery_snapshot_item_ids': recovery_snapshot_ids, 'settle_reconciled_item_ids': sorted(reconciled_ids), 'reconstructed_item_ids': recovered_ids, 'settle_item_ids': sorted(saved_ids), 'saved_items_not_seen_live': len(saved_ids - live_ids), 'intermediate_events_missed': None, 'intermediate_events_reason': 'not_reconstructable_from_saved_items', 'required_actions': note.get('required_actions') if note else None, 'buffered_events': note.get('buffered_events') if note else None, 'buffered_applied': note.get('buffered_applied') if note else None, 'buffered_final_discarded': note.get('buffered_final_discarded') if note else None}
             _write(run_dir / 'stream_recovery.json', record['stream_recovery'], secrets, urls)
         text = final_answer(items)
         ground_truth = {'expected_files': list(EXPECTED), 'files_present_after': sorted(hashes), 'commands_not_completed': [str(item.get('command') or '')[:4000] for item in failed_commands[:20]], 'failed_files': [name for name in EXPECTED if name not in hashes] + (['step2.txt'] if any('seq 1 45' in str(item.get('command') or '') for item in failed_commands) else []), 'turn_status': root_status, 'files_match': files_ok}
