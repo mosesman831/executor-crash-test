@@ -5,3 +5,14 @@ __pycache__/
 node_modules/
 runs/
 *.jsonl
+!.env.example
+SPEC*
+PLAN*
+NOTES*
+ARCHITECTURE*
+DESIGN*
+.venv/
+ws/
+docs-exec-server-help.txt
+!fixtures/**/*.jsonl
+!**/fixtures/**/*.jsonl
