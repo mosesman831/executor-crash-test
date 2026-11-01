@@ -40,7 +40,7 @@ try {
   const env = {OPENAI_API_KEY:secret, DB};
   async function request(path, body, user = 'owner') {
     const headers = {'content-type':'application/json', 'origin':'https://example.test', 'x-crashtest':'1'};
-    if (user) headers['oai-authenticated-user-id'] = user;
+    if (user) headers['oai-authenticated-user-email'] = user;
     const response = await worker.fetch(new Request(`https://example.test${path}`, {method:'POST',headers,body:JSON.stringify(body)}), env);
     const text = await response.text();
     assert(!text.includes(secret), `Secret leaked in ${path}`);
@@ -65,6 +65,8 @@ try {
     assert(entry?.inputSchema, `missing ${name} schema`);
     assert.equal(entry.inputSchema.additionalProperties, false);
   }
+  const metadataCall = await rpc('tools/call', {name:'get_run_status', arguments:{}, _meta:{progressToken:'test'}});
+  assert(!metadataCall.value.error, 'standard MCP metadata should not be rejected');
   const unauthorized = await tool('start_test', {scenario:'F0'}, null);
   assert(unauthorized.status === 401 || unauthorized.value.error || unauthorized.value.result?.isError);
   const rejected = await tool('start_test', {scenario:'F0',command:'echo unsafe'});

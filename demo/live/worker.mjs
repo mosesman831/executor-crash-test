@@ -42,6 +42,7 @@ async function verifyStoredTicket(secret,token,user){
   return value.user===user&&/^sess_[A-Za-z0-9_-]+$/.test(value.sid)&&['F0','F1'].includes(value.scenario)&&Number.isFinite(value.exp)?value:null;
  }catch{return null}
 }
+function identity(request){const email=request.headers.get('oai-authenticated-user-email');return email?email.trim().toLowerCase():request.headers.get('oai-authenticated-user-id')}
 function dbQuery(env,sql,...values){return env.DB.prepare(sql).bind(...values)}
 async function latestSharedRun(env,user){return dbQuery(env,'SELECT ticket, scenario, session_prefix, created_at FROM shared_runs WHERE user_id = ? LIMIT 1',user).first()}
 async function internalApi(worker,request,env,user,path,body={}){
@@ -69,8 +70,8 @@ const worker={async fetch(request,env){
   if(method==='server/discover')return mcpReply(id,{protocolVersion:'2026-07-28',supportedVersions:['2026-07-28'],serverInfo:{name:'executor-crash-test',version:'1.0.0'},capabilities:{tools:{listChanged:false}},tools:MCP_TOOLS});
   if(method==='tools/list')return mcpReply(id,{tools:MCP_TOOLS});
   if(method!=='tools/call')return mcpError(id,-32601,'Method not found');
-  const user=request.headers.get('oai-authenticated-user-id');if(!user)return mcpReply(id,mcpToolResult({error:'Sign in to use the live test.'},true));
-  if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).some(key=>!['name','arguments'].includes(key))||typeof params.name!=='string')return mcpError(id,-32602,'Invalid tool arguments');
+  const user=identity(request);if(!user)return mcpReply(id,mcpToolResult({error:'Sign in to use the live test.'},true));
+  if(!params||typeof params!=='object'||Array.isArray(params)||Object.keys(params).some(key=>!['name','arguments','_meta'].includes(key))||typeof params.name!=='string')return mcpError(id,-32602,'Invalid tool arguments');
   const name=params?.name;const args=params?.arguments??{};const tool=MCP_TOOLS.find(item=>item.name===name);
   if(!tool)return mcpError(id,-32602,'Unknown tool');
   if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(key=>!Object.hasOwn(tool.inputSchema.properties,key))||(name==='start_test'&&(!['F0','F1'].includes(args.scenario)||Object.keys(args).length!==1))||(name!=='start_test'&&Object.keys(args).length!==0))return mcpError(id,-32602,'Invalid tool arguments');
@@ -113,7 +114,7 @@ const worker={async fetch(request,env){
   return mcpReply(id,mcpToolResult({scenario:run.scenario,evidence,interpretation_guidance:'Assess F0 using the completed root turn, successful command outcomes, and a matching artifact for that turn. F1 remains INCONCLUSIVE without independent proof of the signal and file survival; do not claim PASS from a completed turn or disconnect alone.'}));
  }
  if(!url.pathname.startsWith('/api/'))return json({error:'Not found'},404);
- const user=request.headers.get('oai-authenticated-user-id');if(!user)return json({error:'Sign in to use the live test.'},401);
+ const user=identity(request);if(!user)return json({error:'Sign in to use the live test.'},401);
  if(request.method!=='POST'||request.headers.get('x-crashtest')!=='1'||request.headers.get('origin')!==url.origin)return json({error:'Request rejected'},403);
  const secret=env.OPENAI_API_KEY;if(!secret)return json({error:'Live test is not configured yet. The server needs its OpenAI API key.'},503);
  let body;try{const text=await request.text();if(text.length>4096)return json({error:'Request too large'},413);body=JSON.parse(text||'{}')}catch{return json({error:'Invalid request'},400)}
