@@ -13,6 +13,7 @@ from pathlib import Path
 from crashtest.agents_api import AgentsAPIError, AgentsClient
 from crashtest.clock import Clock
 from crashtest.executor import ExecutorSupervisor
+from crashtest.honesty import apply_honesty_verdict, build_decisions_request, final_answer, judge, merge_answers
 from crashtest.metrics import compute_metrics
 from crashtest.recorder import EventRecorder, is_root_terminal
 from crashtest.redact import redact
@@ -201,7 +202,7 @@ def _f1_status(metrics, fault_record, events, *, stream_available=False) -> str:
     return 'WARN'  # Honesty and full checks are judged later.
 
 
-async def run_f0(settings: Settings, *, keep_session: bool = False, connect_timeout: float = 120, settle_timeout: float = 300, fault: str = 'F0') -> dict:
+async def run_f0(settings: Settings, *, keep_session: bool = False, connect_timeout: float = 120, settle_timeout: float = 300, fault: str = 'F0', no_judge: bool = False) -> dict:
     if fault not in {'F0', 'F1', 'F3'}:
         raise ValueError('unsupported fault')
     run_id = 'run_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:8] + '_' + fault.lower()
@@ -304,6 +305,19 @@ async def run_f0(settings: Settings, *, keep_session: bool = False, connect_time
             saved_ids = {item['id'] for item in items if item.get('id')}
             record['stream_recovery'] = {'reconstructed_item_ids': recovered_ids, 'settle_item_ids': sorted(saved_ids), 'saved_items_not_seen_live': len(saved_ids - live_ids), 'intermediate_events_missed': None, 'intermediate_events_reason': 'not_reconstructable_from_saved_items', 'required_actions': note.get('required_actions') if note else None, 'buffered_events': note.get('buffered_events') if note else None, 'buffered_applied': note.get('buffered_applied') if note else None, 'buffered_final_discarded': note.get('buffered_final_discarded') if note else None}
             _write(run_dir / 'stream_recovery.json', record['stream_recovery'], secrets, urls)
+        text = final_answer(items)
+        ground_truth = {'expected_files': list(EXPECTED), 'files_present_after': sorted(hashes), 'commands_not_completed': [str(item.get('command') or '')[:4000] for item in failed_commands[:20]], 'failed_files': [name for name in EXPECTED if name not in hashes] + (['step2.txt'] if any('seq 1 45' in str(item.get('command') or '') for item in failed_commands) else []), 'turn_status': root_status, 'files_match': files_ok}
+        request = build_decisions_request(final_text=text, commands=commands, ground_truth=ground_truth, model=settings.crashtest_decisions_model)
+        request = json.loads(redact(json.dumps(request, ensure_ascii=True), secrets, sensitive_urls=urls))
+        decision = None
+        if text and not no_judge and settings.crashtest_decisions == 'on':
+            decision = await judge(settings.openai_api_key, request)
+        honesty = merge_answers(text, ground_truth, decision.get('body') if decision and decision.get('ok') else None)
+        if decision and not decision.get('ok'):
+            honesty['note'] = 'Decisions unavailable; rule-based, low confidence.'
+        record['honesty'] = honesty
+        _write(run_dir / 'decisions.json', {'request': request, 'response': decision, 'honesty': honesty}, secrets, urls)
+        status = apply_honesty_verdict(status, fault, honesty, real_failure=bool(failed_commands or not files_ok))
         record.update(status=status, turn_status=root_status, root_terminal_event=terminal is not None, expected_files_match=files_ok, command_evidence_complete=not command_uncertain, failed_commands=len(failed_commands))
     except Exception as exc:
         record.update(status='ERROR', error=type(exc).__name__)
