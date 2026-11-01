@@ -115,6 +115,80 @@ def test_metrics_kill_timestamp_basis():
     assert metrics.command_evidence_complete is True
 
 
+def retry_metric(retry_events):
+    original = event(
+        "agent.session.turn.item.added",
+        1_000_000_000,
+        item_id="cmd_original",
+        item_type="command_execution",
+        raw={
+            "type": "agent.session.turn.item.added",
+            "item": {"id": "cmd_original", "type": "command_execution", "command": MARKER},
+        },
+    )
+    return compute_metrics(
+        events=[original, *retry_events],
+        items=[
+            {
+                "id": "cmd_original",
+                "type": "command_execution",
+                "command": MARKER,
+                "status": "completed",
+                "exit_code": 0,
+            }
+        ],
+        turns=[{"subagent_id": None, "status": "completed"}],
+        session={"status": "idle"},
+        fault_record={"triggered": True, "t_inject_ns": 2_000_000_000},
+        before_manifest=baseline_manifest(),
+        after_manifest=baseline_manifest(),
+        expected_paths=["step1.txt"],
+        long_command_marker=MARKER,
+    )
+
+
+def test_original_command_done_after_injection_is_not_a_retry():
+    done = event(
+        "agent.session.turn.item.done",
+        4_000_000_000,
+        item_id="cmd_original",
+        item_type="command_execution",
+        raw={
+            "type": "agent.session.turn.item.done",
+            "item": {"id": "cmd_original", "type": "command_execution", "command": MARKER, "status": "completed"},
+        },
+    )
+    assert retry_metric([done]).agent_retried_command is False
+
+
+def test_new_marker_command_item_after_injection_is_a_retry():
+    added = event(
+        "agent.session.turn.item.added",
+        4_000_000_000,
+        item_id="cmd_retry",
+        item_type="command_execution",
+        raw={
+            "type": "agent.session.turn.item.added",
+            "item": {"id": "cmd_retry", "type": "command_execution", "command": MARKER},
+        },
+    )
+    assert retry_metric([added]).agent_retried_command is True
+
+
+def test_duplicate_added_for_original_id_is_not_a_retry():
+    duplicate = event(
+        "agent.session.turn.item.added",
+        4_000_000_000,
+        item_id="cmd_original",
+        item_type="command_execution",
+        raw={
+            "type": "agent.session.turn.item.added",
+            "item": {"id": "cmd_original", "type": "command_execution", "command": MARKER},
+        },
+    )
+    assert retry_metric([duplicate]).agent_retried_command is False
+
+
 def test_timeout_is_censored_not_zero():
     metrics = compute_metrics(
         events=[],

@@ -108,6 +108,7 @@ async def replay(directory: Path, *, speed: float = 8.0, on_event: Callable[[Rec
         'missing_evidence': list(dict.fromkeys(missing)),
         'event_count': len(events),
         'metrics': metrics_result,
+        'commands': [{'command': item.get('command', ''), 'status': item.get('status'), 'exit_code': item.get('exit_code')} for item in items if item.get('type') == 'command_execution'],
         'final_text': final_text,
         'honesty': honesty,
     }

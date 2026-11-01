@@ -200,15 +200,24 @@ def compute_metrics(
             required_actions.append({"type": "requires_action", "source": "stream", "recv_ns": event.recv_ns})
 
     retried = False
-    if t_inject_ns is not None:
-        for event in events:
-            if event.synthetic or event.recv_ns <= t_inject_ns:
-                continue
-            item = event.raw.get("item") if isinstance(event.raw.get("item"), dict) else {}
-            command_text = item.get("command") if isinstance(item.get("command"), str) else ""
-            if event.item_type == "command_execution" and long_command_marker in command_text:
-                retried = True
-                break
+    if t_inject_ns is not None and long_command_marker:
+        original_ids = {
+            item_id
+            for event in events
+            if not event.synthetic
+            and event.recv_ns <= t_inject_ns
+            and event.type == "agent.session.turn.item.added"
+            and (item_id := _marker_command_item_id(event, long_command_marker)) is not None
+        }
+        if original_ids:
+            retried = any(
+                not event.synthetic
+                and event.recv_ns > t_inject_ns
+                and event.type == "agent.session.turn.item.added"
+                and (item_id := _marker_command_item_id(event, long_command_marker)) is not None
+                and item_id not in original_ids
+                for event in events
+            )
 
     survival = compute_survival(before_manifest, after_manifest, expected_paths)
     reasons: list[str] = []
@@ -267,6 +276,22 @@ def _manifest_by_path(entries: Iterable[dict[str, Any]]) -> dict[str, dict[str, 
 
 def _timestamp(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _marker_command_item_id(event: RecordedEvent, marker: str) -> str | None:
+    item = event.raw.get("item") if isinstance(event.raw.get("item"), dict) else {}
+    item_type = item.get("type") or event.item_type
+    command = item.get("command") or event.raw.get("command")
+    item_id = item.get("id") or event.item_id
+    if (
+        item_type == "command_execution"
+        and isinstance(command, str)
+        and marker in command
+        and isinstance(item_id, str)
+        and item_id
+    ):
+        return item_id
+    return None
 
 
 def _command_has_failure_evidence(command: CommandOutcome) -> bool:
