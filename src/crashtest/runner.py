@@ -235,6 +235,8 @@ def _f1_status(metrics, fault_record, events, *, stream_available=False) -> str:
 
 
 async def run_f0(settings: Settings, *, keep_session: bool = False, connect_timeout: float = 120, settle_timeout: float = 300, fault: str = 'F0', no_judge: bool = False) -> dict:
+    if settings.openai_executor_api_key is None:
+        raise ValueError('A separate executor key is required for self-hosted runs')
     if fault not in {'F0', 'F1', 'F3'}:
         raise ValueError('unsupported fault')
     run_id = 'run_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:8] + '_' + fault.lower()
