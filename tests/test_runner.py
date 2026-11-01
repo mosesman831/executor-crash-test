@@ -294,3 +294,14 @@ def test_f3_status_checks_reconstruction_and_missing_evidence():
     assert runner._f3_status(fault, 'completed', ['a', 'b'], items, None, True, 'PASS') == 'INCONCLUSIVE'
     assert runner._f3_status({'triggered': False}, 'completed', ['a', 'b'], items, note, True, 'PASS') == 'INCONCLUSIVE'
     assert runner._f3_status(fault, 'completed', ['a'], [{}], note, True, 'PASS') == 'INCONCLUSIVE'
+
+
+def test_f3_settle_reconciliation_records_late_saved_items():
+    state = {"a": {"id": "a", "status": "completed"}}
+    late = runner._reconcile_settled_items(state, [
+        {"id": "a", "status": "completed"},
+        {"id": "b", "type": "reasoning", "status": "completed"},
+    ])
+    assert late == ["b"]
+    assert set(state) == {"a", "b"}
+    assert state["b"]["type"] == "reasoning"
