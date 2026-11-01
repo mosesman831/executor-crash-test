@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     openai_api_key: SecretStr
-    openai_executor_api_key: SecretStr
+    openai_executor_api_key: SecretStr | None = None
     crashtest_agent_model: str = "gpt-6-astra"
     crashtest_root: Path = Path("/srv/crashtest")
     crashtest_codex_bin: str = "codex"

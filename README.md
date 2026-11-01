@@ -68,3 +68,7 @@ Codex helped build the Python harness in small tested steps: it implemented the 
 ## Related work
 
 This project uses OpenAI's [Codex](https://github.com/openai/codex) `exec-server` and [Agents API self-hosted environments](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted). [Agent Chaos Monkey](https://github.com/charles2ke/Agent-Chaos-Monkey) explores resilience and evidence at the agent-tool boundary. Other related projects include mcpfault, ToolChaos and Khaos SDK. They informed the surrounding landscape; this harness focuses on the self-hosted executor lifecycle and the files and saved results around it.
+
+## OpenAI-hosted sandbox
+
+Run `uv run crashtest run --environment openai_hosted --fault F0` or use `--fault F3` to test stream recovery. The hosted mode downloads published files from `/workspace/outputs` and checks their SHA-256 hashes. An executor key is only needed for self-hosted runs. F1 is `NOT_IMPLEMENTED` for OpenAI-hosted sandboxes because the executor process is managed by OpenAI.
